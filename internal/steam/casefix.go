@@ -27,6 +27,12 @@ import (
 // Only mods whose XMLs actually use x_extends/x_include with uppercase path
 // components get aliases; everything else is left untouched.
 //
+// The returned count is the number of aliases IN USE (created this boot or
+// already present from a previous boot). The caller uses it to decide whether
+// the anti-cheat checksum must be disabled: the checksum walks the mods'
+// media/AnimSets and media/actiongroups dirs, so the aliases make it disagree
+// with every client ("File doesn't exist on the client").
+//
 // Set MOD_CASE_ALIASES=false to disable the workaround entirely.
 func EnsureCaseAliases(cfg *config.ServerConfig) (int, error) {
 	if !cfg.ModCaseAliases {
@@ -34,7 +40,8 @@ func EnsureCaseAliases(cfg *config.ServerConfig) (int, error) {
 		return 0, nil
 	}
 
-	total := 0
+	created := 0
+	present := 0
 	itemDirs, err := os.ReadDir(workshopDir(cfg))
 	if err == nil {
 		for _, item := range itemDirs {
@@ -46,8 +53,9 @@ func EnsureCaseAliases(cfg *config.ServerConfig) (int, error) {
 			if sub, err := os.ReadDir(filepath.Join(itemPath, "mods")); err == nil {
 				for _, d := range sub {
 					if d.IsDir() {
-						n := ensureModCaseAliases(filepath.Join(itemPath, "mods", d.Name()), d.Name(), filepath.Join(itemPath, "mods"))
-						total += n
+						c, p := ensureModCaseAliases(filepath.Join(itemPath, "mods", d.Name()), d.Name(), filepath.Join(itemPath, "mods"))
+						created += c
+						present += p
 					}
 				}
 			}
@@ -55,8 +63,9 @@ func EnsureCaseAliases(cfg *config.ServerConfig) (int, error) {
 			if sub, err := os.ReadDir(itemPath); err == nil {
 				for _, d := range sub {
 					if d.IsDir() && d.Name() != "mods" {
-						n := ensureModCaseAliases(filepath.Join(itemPath, d.Name()), d.Name(), itemPath)
-						total += n
+						c, p := ensureModCaseAliases(filepath.Join(itemPath, d.Name()), d.Name(), itemPath)
+						created += c
+						present += p
 					}
 				}
 			}
@@ -68,39 +77,48 @@ func EnsureCaseAliases(cfg *config.ServerConfig) (int, error) {
 	if sub, err := os.ReadDir(manualDir); err == nil {
 		for _, d := range sub {
 			if d.IsDir() {
-				n := ensureModCaseAliases(filepath.Join(manualDir, d.Name()), d.Name(), manualDir)
-				total += n
+				c, p := ensureModCaseAliases(filepath.Join(manualDir, d.Name()), d.Name(), manualDir)
+				created += c
+				present += p
 			}
 		}
 	}
 
-	if total > 0 {
-		fmt.Printf("Created %d lowercase symlink aliases for Linux case-sensitive mod paths\n", total)
+	if created > 0 {
+		fmt.Printf("Created %d lowercase symlink aliases for Linux case-sensitive mod paths\n", created)
 	}
-	return total, nil
+	if present > 0 {
+		fmt.Printf("%d lowercase symlink aliases are in use for Linux case-sensitive mod paths\n", present)
+	}
+	return present, nil
 }
 
 // ensureModCaseAliases creates lowercase aliases for one mod folder when its
 // XMLs reference other files via x_extends/x_include and the mod tree has
 // mixed-case names (the only situation the build-42 lowercase resolution
-// breaks). Returns the number of symlinks created.
-func ensureModCaseAliases(modDir, modName, parentDir string) int {
+// breaks). Returns the number of aliases created and the number now present
+// (created plus those left over from a previous boot).
+func ensureModCaseAliases(modDir, modName, parentDir string) (created, present int) {
 	if !modNeedsCaseAliases(modDir) {
-		return 0
+		return 0, 0
 	}
 
-	created := 0
 	if hasUppercase(modName) {
 		alias := filepath.Join(parentDir, strings.ToLower(modName))
 		if createAlias(alias, modDir) {
 			created++
 		}
+		if _, err := os.Lstat(alias); err == nil {
+			present++
+		}
 	}
-	created += aliasTree(modDir)
-	if created > 0 {
-		fmt.Printf("Created %d case aliases for mod %q (%s): PZ build 42 resolves x_extends/x_include paths in lowercase, which fails on Linux for mixed-case file names\n", created, modName, modDir)
+	c, p := aliasTree(modDir)
+	created += c
+	present += p
+	if c > 0 {
+		fmt.Printf("Created %d case aliases for mod %q (%s): PZ build 42 resolves x_extends/x_include paths in lowercase, which fails on Linux for mixed-case file names\n", c, modName, modDir)
 	}
-	return created
+	return created, present
 }
 
 // modNeedsCaseAliases walks the mod tree once and reports whether any path
@@ -133,22 +151,24 @@ func modNeedsCaseAliases(modDir string) bool {
 
 // aliasTree creates a lowercase symlink for every file and directory in the
 // tree whose name contains uppercase characters. It walks the real tree only
-// (never recursing through symlinks), so aliases never alias aliases.
-func aliasTree(root string) int {
+// (never recursing through symlinks), so aliases never alias aliases. Returns
+// the number of aliases created and the number now present.
+func aliasTree(root string) (created, present int) {
 	return aliasTreeDir(root)
 }
 
-func aliasTreeDir(dir string) int {
-	created := 0
+func aliasTreeDir(dir string) (created, present int) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return 0
+		return 0, 0
 	}
 	for _, e := range entries {
 		name := e.Name()
 		if !hasUppercase(name) {
 			if e.IsDir() {
-				created += aliasTreeDir(filepath.Join(dir, name))
+				c, p := aliasTreeDir(filepath.Join(dir, name))
+				created += c
+				present += p
 			}
 			continue
 		}
@@ -157,11 +177,16 @@ func aliasTreeDir(dir string) int {
 		if createAlias(alias, real) {
 			created++
 		}
+		if _, err := os.Lstat(alias); err == nil {
+			present++
+		}
 		if e.IsDir() {
-			created += aliasTreeDir(real)
+			c, p := aliasTreeDir(real)
+			created += c
+			present += p
 		}
 	}
-	return created
+	return created, present
 }
 
 // createAlias symlinks alias -> real, skipping anything that already exists

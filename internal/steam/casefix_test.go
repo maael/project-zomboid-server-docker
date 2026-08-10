@@ -50,13 +50,14 @@ func TestEnsureCaseAliasesCreatesLowercaseAliases(t *testing.T) {
 		t.Errorf("alias content mismatch: %q", data)
 	}
 
-	// Idempotent: a second pass creates nothing new.
+	// Idempotent: a second pass creates nothing new but still reports the
+	// aliases in use (so the caller can disable the checksum on every boot).
 	n2, err := EnsureCaseAliases(cfg)
 	if err != nil {
 		t.Fatalf("EnsureCaseAliases (2nd run): %v", err)
 	}
-	if n2 != 0 {
-		t.Errorf("second run created %d more aliases, want 0", n2)
+	if n2 != n {
+		t.Errorf("second run reports %d aliases in use, want %d (unchanged)", n2, n)
 	}
 }
 
