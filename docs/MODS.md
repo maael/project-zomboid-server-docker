@@ -51,6 +51,48 @@ the game registers -- without this, affected mods are silently rejected with
 If you pin `MOD_NAMES` yourself, use the `id=` values (either spelling works
 for the `entrypoint mods` check: ids and folder names are both accepted).
 
+## Linux Case-Sensitivity Workaround (Build 42 animation bug)
+
+Some Build 42 mods ship animation XML files with mixed-case names (for
+example "Guns of Marz" ships `LoadShotgun_HB.xml` inside a `GunsOfMarz`
+folder). Modders develop on Windows, where the filesystem is
+case-insensitive, so the game works there. On a Linux server, Project
+Zomboid build 42 resolves `x_extends` / `x_include` animation references by
+**lowercasing the entire path** and opening it directly from disk. On
+Windows that still finds the file; on Linux the lowercased path does not
+exist, and every referenced animation node fails with a
+`FileNotFoundException` in the server log:
+
+```text
+AnimNode.Parse threw an exception reading file: .../RackShotgun_HB.xml
+PZXmlParserException: ... "steamapps/workshop/content/108600/<id>/mods/gunsofmarz/42.16/media/animsets/player-vehicle/actions/loadshotgun_hb.xml"
+java.io.FileNotFoundException: ... loadshotgun_hb.xml (No such file or directory)
+```
+
+The affected reload/rack animations silently break, even though the mod
+itself loads. This is a game bug, not a container bug -- mods whose XMLs
+avoid `x_extends` (even with mixed-case file names) are unaffected.
+
+The entrypoint works around it automatically: on every start it scans the
+workshop mods, detects which ones use `x_extends`/`x_include` with
+mixed-case paths, and creates **lowercase symlink aliases** for every
+uppercase-named file and folder (and for the mod folder itself), so the
+game's lowercased lookups resolve. Symlinks only: real files are never
+renamed, so Steam re-downloads and mod updates are unaffected, and the
+aliases are recreated on every boot (idempotent, self-healing).
+
+You will see a line like this in the logs:
+
+```text
+Created 751 case aliases for mod "GunsOfMarz" (...): PZ build 42 resolves x_extends/x_include paths in lowercase, which fails on Linux for mixed-case file names
+```
+
+To disable the workaround:
+
+```env
+MOD_CASE_ALIASES=false
+```
+
 ## How It Works
 
 1. `MOD_WORKSHOP_IDS` and `MOD_WORKSHOP_COLLECTION_IDS` are resolved to a list of item IDs (collections via the public Steam page, or the Steam Web API when `STEAM_API_KEY` is set)
@@ -123,6 +165,9 @@ steamcmd re-downloads each item (unchanged items resolve quickly).
   dependency id is a typo) are also rejected by the game; the entrypoint
   prints a `requires "X" which is not installed` warning naming the missing
   dependency
+- `AnimNode.Parse threw an exception ... FileNotFoundException` lines are the
+  Build 42 case-sensitivity bug described above; the entrypoint's symlink
+  aliases fix it automatically on the next start
 - Some mods require installation on the client side too
 - Clients must subscribe to the same Workshop items on Steam
 

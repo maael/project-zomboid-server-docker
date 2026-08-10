@@ -33,6 +33,7 @@ type ServerConfig struct {
 	AutoUpdateAnnounce    int
 	AutoUpdateWaitEmpty   bool
 	AutoUpdateWaitMax     int
+	ModCaseAliases        bool
 	SteamAPIKey           string
 	MaxRam                string
 	MinRam                string
@@ -90,6 +91,7 @@ func DefaultConfig() *ServerConfig {
 		AutoUpdateAnnounce:    envInt("MOD_AUTO_UPDATE_ANNOUNCE", 5),
 		AutoUpdateWaitEmpty:   envBool("MOD_AUTO_UPDATE_WAIT_EMPTY", true),
 		AutoUpdateWaitMax:     envInt("MOD_AUTO_UPDATE_WAIT_MAX", 2),
+		ModCaseAliases:        envBool("MOD_CASE_ALIASES", true),
 		SteamAPIKey:           envStr("STEAM_API_KEY", ""),
 		MaxRam:                envStr("MAX_RAM", "4096m"),
 		MinRam:                envStr("MIN_RAM", "4096m"),

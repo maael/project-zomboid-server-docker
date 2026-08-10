@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- `MOD_CASE_ALIASES` (default true): the entrypoint creates lowercase symlink aliases for workshop mods whose `x_extends`/`x_include` animation XMLs reference mixed-case file names. PZ build 42 lowercases those resolved paths and opens them directly on disk, which fails with `FileNotFoundException` on Linux (mods like "Guns of Marz" that work on Windows); the symlinks let the game's lowercased lookups resolve. Real files are never modified, so Steam updates are unaffected, and aliases are recreated each boot (see `docs/MODS.md`)
 - `SANDBOX_MODE` presets for performance: `apocalypse` (default), `performance` (world-cleanup: corpses 48h, blood 7d, rotten food 14d, rats off), `max` (adds reduced zombie population/rally groups for the best TPS)
 - Nested sandbox overrides via dot notation: `SANDBOX_ZombieConfig.PopulationMultiplier=0.5` and `SANDBOX_ZombieLore.Speed=4` write into the nested b42 tables (env overrides still win over `SANDBOX_MODE`)
 - `docs/PERFORMANCE.md` with JVM, sandbox, compose (cpuset/mem_limit/ulimits), storage and kernel tuning guidance

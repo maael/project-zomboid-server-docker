@@ -53,6 +53,7 @@ var (
 	installOrUpdate    = steam.InstallOrUpdate
 	resolveModWorkshop = steam.ResolveModWorkshopIDs
 	downloadWorkshop   = steam.DownloadWorkshopItems
+	ensureCaseAliases  = steam.EnsureCaseAliases
 	discoverModNames   = steam.DiscoverModNames
 	warnMissingMods    = steam.WarnMissingMods
 	newServerManager   = server.NewManager
@@ -124,6 +125,13 @@ func run() error {
 		if err := downloadWorkshop(cfg, modIDs); err != nil {
 			fmt.Printf("ERROR downloading workshop mods: %v\n", err)
 		}
+	}
+
+	// PZ build 42 resolves x_extends/x_include animation paths in lowercase
+	// and opens them directly on disk, which fails on Linux for mixed-case
+	// mod files. Create lowercase symlink aliases so such mods load.
+	if _, err := ensureCaseAliases(cfg); err != nil {
+		fmt.Printf("WARNING: could not create mod case aliases: %v\n", err)
 	}
 
 	if cfg.ModNames == "" {
