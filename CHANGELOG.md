@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Added
-- `MOD_CASE_ALIASES` (default true): the entrypoint creates lowercase symlink aliases for workshop mods whose `x_extends`/`x_include` animation XMLs reference mixed-case file names. PZ build 42 lowercases those resolved paths and opens them directly on disk, which fails with `FileNotFoundException` on Linux (mods like "Guns of Marz" that work on Windows); the symlinks let the game's lowercased lookups resolve. Real files are never modified, so Steam updates are unaffected, and aliases are recreated each boot (see `docs/MODS.md`)
+- `MOD_CASE_ALIASES` (default true): the entrypoint creates lowercase symlink aliases for workshop mods whose `x_extends`/`x_include` animation XMLs reference mixed-case file names. PZ build 42 lowercases those resolved paths and opens them directly on disk, which fails with `FileNotFoundException` on Linux (mods like "Guns of Marz" that work on Windows); the symlinks let the game's lowercased lookups resolve. Real files are never modified, so Steam updates are unaffected, and aliases are recreated each boot. Because the aliases add files under mod media dirs, the anti-cheat checksum would kick every client on join ("File doesn't exist on the client"), so the entrypoint sets `DoLuaChecksum=false` in the server ini automatically when aliases are created (honored unless `INI_DoLuaChecksum` is set explicitly; see `docs/MODS.md`)
 - `SANDBOX_MODE` presets for performance: `apocalypse` (default), `performance` (world-cleanup: corpses 48h, blood 7d, rotten food 14d, rats off), `max` (adds reduced zombie population/rally groups for the best TPS)
 - Nested sandbox overrides via dot notation: `SANDBOX_ZombieConfig.PopulationMultiplier=0.5` and `SANDBOX_ZombieLore.Speed=4` write into the nested b42 tables (env overrides still win over `SANDBOX_MODE`)
 - `docs/PERFORMANCE.md` with JVM, sandbox, compose (cpuset/mem_limit/ulimits), storage and kernel tuning guidance
@@ -31,6 +31,8 @@
 - Nested sandbox tables (flat `SANDBOX_ZombieConfig=...`) are only rendered through the mode/block builders; unsupported nested tables warn and are ignored
 - `backup.Manager.Scheduler` no longer takes the server manager (decoupled; RCON save only needs the config)
 - List parsing unified (`config.ParseList`) across config and steam packages
+- Compose runs the container with `network_mode: host` instead of published ports: the game binds the host's public IP directly, which is the lowest-latency setup for the direct UDP path (no `ports:` mapping needed). `docker-compose.multi.yml` stays on bridge (two servers would collide on the ports)
+- `docs/TROUBLESHOOTING.md`: new "Client warning: port 16262 is closed / relay lag" section — the warning means the client session is relayed through Steam Datagram Relay; the usual fix is un-ticking the client's **"Use steam relay"** checkbox in the Add Server dialog, with server-side checks for the direct path (UDP 16261/16262 open, game bound to the public IP)
 
 ## [0.1.0] - 2026-08-03
 

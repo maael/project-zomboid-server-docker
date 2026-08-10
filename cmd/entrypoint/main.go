@@ -130,8 +130,23 @@ func run() error {
 	// PZ build 42 resolves x_extends/x_include animation paths in lowercase
 	// and opens them directly on disk, which fails on Linux for mixed-case
 	// mod files. Create lowercase symlink aliases so such mods load.
-	if _, err := ensureCaseAliases(cfg); err != nil {
+	aliasesCreated, err := ensureCaseAliases(cfg)
+	if err != nil {
 		fmt.Printf("WARNING: could not create mod case aliases: %v\n", err)
+	}
+	if aliasesCreated > 0 {
+		// The anti-cheat checksum walks every mod's media/AnimSets and
+		// media/actiongroups and hashes the files. The aliases add files
+		// there that clients do not have, so the checksum comparison kicks
+		// them with "File doesn't exist on the client". Disable the checksum
+		// unless the operator explicitly configured it.
+		explicit, ok := cfg.IniOptions["DoLuaChecksum"]
+		if ok && !strings.EqualFold(explicit, "false") {
+			fmt.Println("WARNING: INI_DoLuaChecksum is enabled but mod case aliases were created: clients will be kicked by the checksum (\"File doesn't exist on the client\"). Set INI_DoLuaChecksum=false")
+		} else if !ok {
+			cfg.IniOptions["DoLuaChecksum"] = "false"
+			fmt.Println("Set DoLuaChecksum=false in the server ini: case aliases add files under mod media dirs that the anim checksum would flag on clients")
+		}
 	}
 
 	if cfg.ModNames == "" {

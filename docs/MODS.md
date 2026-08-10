@@ -85,9 +85,26 @@ You will see a line like this in the logs:
 
 ```text
 Created 751 case aliases for mod "GunsOfMarz" (...): PZ build 42 resolves x_extends/x_include paths in lowercase, which fails on Linux for mixed-case file names
+Set DoLuaChecksum=false in the server ini: case aliases add files under mod media dirs that the anim checksum would flag on clients
 ```
 
-To disable the workaround:
+### Why `DoLuaChecksum=false` is required
+
+The game's anti-cheat checksum walks every loaded mod's `media/AnimSets` and
+`media/actiongroups` directories, hashes each `.xml` file, and compares the
+list against each joining client. The aliases are additional files in those
+trees that clients do not have, so the comparison fails and every client is
+kicked with `File doesn't exist on the client: ...` on join.
+
+The entrypoint therefore writes `DoLuaChecksum=false` into the server ini
+whenever it creates aliases, which skips the checksum exchange entirely. If
+you explicitly set `INI_DoLuaChecksum=true` in `.env`, the entrypoint honors
+it and only prints a warning -- but clients will not be able to join while
+aliases exist. If you do not want to disable the checksum, the only options
+are removing the affected mods or reporting the mod's mixed-case file names
+to its author.
+
+To disable the workaround entirely:
 
 ```env
 MOD_CASE_ALIASES=false

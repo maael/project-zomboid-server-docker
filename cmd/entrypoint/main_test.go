@@ -114,3 +114,74 @@ func TestRunReturnsIniWriteError(t *testing.T) {
 		t.Fatalf("run() = %v, want ini write error", err)
 	}
 }
+
+func TestRunDisablesDoLuaChecksumWhenAliasesCreated(t *testing.T) {
+	dir := t.TempDir()
+	setEnv(t, map[string]string{
+		"SERVER_NAME": "testworld",
+		"DATA_DIR":    dir,
+		"SERVER_DIR":  t.TempDir(),
+		"BACKUP_PATH": filepath.Join(dir, "backups"),
+	})
+
+	origInstall := installOrUpdate
+	installOrUpdate = func(*config.ServerConfig) error { return nil }
+	defer func() { installOrUpdate = origInstall }()
+	origResolve := resolveModWorkshop
+	resolveModWorkshop = func(*config.ServerConfig) []string { return nil }
+	defer func() { resolveModWorkshop = origResolve }()
+	origDiscover := discoverModNames
+	discoverModNames = func(*config.ServerConfig) []string { return nil }
+	defer func() { discoverModNames = origDiscover }()
+	origAliases := ensureCaseAliases
+	ensureCaseAliases = func(*config.ServerConfig) (int, error) { return 42, nil }
+	defer func() { ensureCaseAliases = origAliases }()
+
+	// The ini is written before the server start attempt; the run stops at
+	// the (expected) missing start-server.sh.
+	if err := run(); err == nil || !strings.Contains(err.Error(), "starting server") {
+		t.Fatalf("run() = %v, want server start error", err)
+	}
+	ini, err := os.ReadFile(filepath.Join(dir, "Server", "testworld.ini"))
+	if err != nil {
+		t.Fatalf("read ini: %v", err)
+	}
+	if !strings.Contains(string(ini), "DoLuaChecksum=false") {
+		t.Errorf("ini does not contain DoLuaChecksum=false:\n%s", ini)
+	}
+}
+
+func TestRunKeepsExplicitDoLuaChecksum(t *testing.T) {
+	dir := t.TempDir()
+	setEnv(t, map[string]string{
+		"SERVER_NAME":       "testworld",
+		"DATA_DIR":          dir,
+		"SERVER_DIR":        t.TempDir(),
+		"BACKUP_PATH":       filepath.Join(dir, "backups"),
+		"INI_DoLuaChecksum": "true",
+	})
+
+	origInstall := installOrUpdate
+	installOrUpdate = func(*config.ServerConfig) error { return nil }
+	defer func() { installOrUpdate = origInstall }()
+	origResolve := resolveModWorkshop
+	resolveModWorkshop = func(*config.ServerConfig) []string { return nil }
+	defer func() { resolveModWorkshop = origResolve }()
+	origDiscover := discoverModNames
+	discoverModNames = func(*config.ServerConfig) []string { return nil }
+	defer func() { discoverModNames = origDiscover }()
+	origAliases := ensureCaseAliases
+	ensureCaseAliases = func(*config.ServerConfig) (int, error) { return 42, nil }
+	defer func() { ensureCaseAliases = origAliases }()
+
+	if err := run(); err == nil || !strings.Contains(err.Error(), "starting server") {
+		t.Fatalf("run() = %v, want server start error", err)
+	}
+	ini, err := os.ReadFile(filepath.Join(dir, "Server", "testworld.ini"))
+	if err != nil {
+		t.Fatalf("read ini: %v", err)
+	}
+	if !strings.Contains(string(ini), "DoLuaChecksum=true") {
+		t.Errorf("explicit INI_DoLuaChecksum=true was not honored:\n%s", ini)
+	}
+}
