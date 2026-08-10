@@ -119,6 +119,10 @@ steamcmd re-downloads each item (unchanged items resolve quickly).
   `mod.info` declares `versionMax` below the running game version are skipped
   automatically with a warning: the game refuses to load them anyway
   (e.g. a mod capped at `versionMax=42.17` on a 42.20.2 server)
+- Mods whose `require=` lists a dependency that is not installed (or whose
+  dependency id is a typo) are also rejected by the game; the entrypoint
+  prints a `requires "X" which is not installed` warning naming the missing
+  dependency
 - Some mods require installation on the client side too
 - Clients must subscribe to the same Workshop items on Steam
 

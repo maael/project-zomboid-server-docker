@@ -572,6 +572,7 @@ type modOnDisk struct {
 	folder   string
 	source   string
 	outdated bool
+	require  []string
 }
 
 // scanModFolders finds every mod folder on disk and maps its identity (mod
@@ -659,6 +660,20 @@ type modVariant struct {
 	buildDir   string
 	versionMin string
 	versionMax string
+	require    []string
+}
+
+// parseRequire splits a mod.info require= value into mod ids, matching the
+// game: comma-separated, trimmed, and leading backslashes stripped.
+func parseRequire(raw string) []string {
+	var out []string
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(strings.TrimPrefix(entry, "\\"))
+		if entry != "" {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 // modVariants returns every mod.info of a mod folder (direct + one per
@@ -672,6 +687,7 @@ func modVariants(dir string) []modVariant {
 			buildDir:   buildDir,
 			versionMin: strings.TrimSpace(info["versionMin"]),
 			versionMax: strings.TrimSpace(info["versionMax"]),
+			require:    parseRequire(info["require"]),
 		})
 	}
 	if hasModInfo(dir) {
@@ -894,6 +910,7 @@ func resolveModIdentity(dir, folder string, gameVer gameVersion, hasGameVer bool
 		name:     name,
 		folder:   folder,
 		outdated: len(variants) > 0 && !compatible,
+		require:  chosen.require,
 	}
 }
 
@@ -924,6 +941,31 @@ func DiscoverModNames(cfg *config.ServerConfig) []string {
 		}
 		names = append(names, name)
 	}
+
+	// A mod whose require= references a mod that is not installed is rejected
+	// by the game (isAvailableRequired); surface that here so it is not a
+	// silent failure. Only warn for mods that are otherwise loadable.
+	for _, m := range mods {
+		if m.outdated {
+			continue
+		}
+		for _, req := range m.require {
+			if _, ok := mods[req]; ok {
+				continue
+			}
+			matched := false
+			for _, other := range mods {
+				if other.folder == req {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				fmt.Printf("WARNING: mod %q requires %q which is not installed; the game will not load it - add the dependency to the collection or remove the mod\n", m.name, req)
+			}
+		}
+	}
+
 	sort.Strings(names)
 	return names
 }

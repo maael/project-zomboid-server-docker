@@ -179,6 +179,46 @@ func TestParseGameVersion(t *testing.T) {
 	}
 }
 
+func TestParseRequire(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"", nil},
+		{"VanillaVehiclesAnimated", []string{"VanillaVehiclesAnimated"}},
+		{"VanillaVehiclesAnimated,FancyHandwork,VanillaVehiclesAnimated_SVU",
+			[]string{"VanillaVehiclesAnimated", "FancyHandwork", "VanillaVehiclesAnimated_SVU"}},
+		{"\\VanillaVehiclesAnimated", []string{"VanillaVehiclesAnimated"}},
+		{"\\VanillaVehiclesAnimated,\\StandardizedVehicleUpgrades3V",
+			[]string{"VanillaVehiclesAnimated", "StandardizedVehicleUpgrades3V"}},
+		{"  a , b ", []string{"a", "b"}},
+	}
+	for _, tc := range cases {
+		if got := parseRequire(tc.in); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("parseRequire(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestDiscoverModNamesWarnsMissingRequire(t *testing.T) {
+	cfg := testConfig(t)
+	base := filepath.Join(cfg.ServerDir, "steamapps/workshop/content/108600/3281755175/mods")
+	// SVU requires a mod id that is not installed anywhere on disk.
+	writeModInfo(t, filepath.Join(base, "VanillaVehiclesAnimated_SVUpatch", "common", "mod.info"),
+		"id=VanillaVehiclesAnimated_SVU\nrequire=\\VanillaVehiclesAnimated,\\StandardizedVehicleUpgrades3V\n")
+	writeModInfo(t, filepath.Join(base, "VanillaVehiclesAnimated", "common", "mod.info"),
+		"id=VanillaVehiclesAnimated\n")
+	// This one requires another installed mod: no warning.
+	writeModInfo(t, filepath.Join(base, "VVA - SnappyDoors", "common", "mod.info"),
+		"id=VVA_snapDoors\nrequire=VanillaVehiclesAnimated\n")
+
+	names := DiscoverModNames(cfg)
+	want := []string{"VVA_snapDoors", "VanillaVehiclesAnimated", "VanillaVehiclesAnimated_SVU"}
+	if !reflect.DeepEqual(names, want) {
+		t.Errorf("DiscoverModNames = %v, want %v", names, want)
+	}
+}
+
 func TestSelectModVariant(t *testing.T) {
 	v42 := modVariant{path: "a/42/mod.info", buildDir: "42", versionMin: "42.0.0"}
 	v4213 := modVariant{path: "a/42.13/mod.info", buildDir: "42.13", versionMin: "42.13.0"}
