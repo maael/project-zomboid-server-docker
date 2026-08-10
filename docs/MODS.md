@@ -38,6 +38,19 @@ You can set it explicitly to pin a load order:
 MOD_NAMES=SkillRecoveryJournal;MoreDescriptionForTraits
 ```
 
+## Build 42 mod IDs
+
+Since Build 42, the game identifies mods by the `id=` field inside `mod.info`,
+**not** by the mod folder name. Many authors use an id that differs from the
+folder name (e.g. "Firearms" has `id=firearmmod`, "DrawOnMap" has
+`id=DRAW_ON_MAP`). The entrypoint therefore reads `id=` from each mod's
+`mod.info` when auto-deriving `MOD_NAMES`, so the `Mods=` line matches what
+the game registers -- without this, affected mods are silently rejected with
+`required mod "X" not found` in the server log.
+
+If you pin `MOD_NAMES` yourself, use the `id=` values (either spelling works
+for the `entrypoint mods` check: ids and folder names are both accepted).
+
 ## How It Works
 
 1. `MOD_WORKSHOP_IDS` and `MOD_WORKSHOP_COLLECTION_IDS` are resolved to a list of item IDs (collections via the public Steam page, or the Steam Web API when `STEAM_API_KEY` is set)
@@ -102,7 +115,10 @@ steamcmd re-downloads each item (unchanged items resolve quickly).
 
 - Run `entrypoint mods` to verify the folder was detected and `MOD_NAMES` matches
 - Check server logs: `docker compose logs zomboid | grep -i mod`
-- Ensure mods are compatible with your game version (B41 vs B42)
+- Ensure mods are compatible with your game version (B41 vs B42). Mods whose
+  `mod.info` declares `versionMax` below the running game version are skipped
+  automatically with a warning: the game refuses to load them anyway
+  (e.g. a mod capped at `versionMax=42.17` on a 42.20.2 server)
 - Some mods require installation on the client side too
 - Clients must subscribe to the same Workshop items on Steam
 

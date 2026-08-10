@@ -564,13 +564,26 @@ func workshopBatchArgs(cfg *config.ServerConfig, ids []string) []string {
 	return append(args, "+quit")
 }
 
-// scanModFolders finds every mod folder on disk and maps its name to its
-// source (workshop item ID or "manual").
-func scanModFolders(cfg *config.ServerConfig) map[string]string {
-	mods := make(map[string]string)
-	add := func(name, source string) {
-		if _, ok := mods[name]; !ok {
-			mods[name] = source
+// modOnDisk describes a mod folder detected on disk. name is the identity the
+// PZ build-42 server registers mods under (the id= field of mod.info, falling
+// back to the folder name), which is what Mods= must contain.
+type modOnDisk struct {
+	name     string
+	folder   string
+	source   string
+	outdated bool
+}
+
+// scanModFolders finds every mod folder on disk and maps its identity (mod
+// name for Mods=) to its source (workshop item ID or "manual").
+func scanModFolders(cfg *config.ServerConfig) map[string]modOnDisk {
+	gameVer, hasGameVer := serverGameVersion(cfg)
+	mods := make(map[string]modOnDisk)
+	add := func(dir, folder, source string) {
+		m := resolveModIdentity(dir, folder, gameVer, hasGameVer)
+		m.source = source
+		if _, ok := mods[m.name]; !ok {
+			mods[m.name] = m
 		}
 	}
 
@@ -580,13 +593,14 @@ func scanModFolders(cfg *config.ServerConfig) map[string]string {
 			if !item.IsDir() {
 				continue
 			}
+			source := "workshop " + item.Name()
 			itemPath := filepath.Join(workshopDir(cfg), item.Name())
 			// Standard layout: <item>/mods/<ModName>/. Build 42 mods are
 			// versioned: <item>/mods/<ModName>/<build>/mod.info.
 			if sub, err := os.ReadDir(filepath.Join(itemPath, "mods")); err == nil {
 				for _, d := range sub {
 					if d.IsDir() && modDirHasModInfo(filepath.Join(itemPath, "mods", d.Name())) {
-						add(d.Name(), "workshop "+item.Name())
+						add(filepath.Join(itemPath, "mods", d.Name()), d.Name(), source)
 					}
 				}
 			}
@@ -594,7 +608,7 @@ func scanModFolders(cfg *config.ServerConfig) map[string]string {
 			if sub, err := os.ReadDir(itemPath); err == nil {
 				for _, d := range sub {
 					if d.IsDir() && d.Name() != "mods" && modDirHasModInfo(filepath.Join(itemPath, d.Name())) {
-						add(d.Name(), "workshop "+item.Name())
+						add(filepath.Join(itemPath, d.Name()), d.Name(), source)
 					}
 				}
 			}
@@ -606,7 +620,7 @@ func scanModFolders(cfg *config.ServerConfig) map[string]string {
 	if sub, err := os.ReadDir(manualDir); err == nil {
 		for _, d := range sub {
 			if d.IsDir() && hasModInfo(filepath.Join(manualDir, d.Name())) {
-				add(d.Name(), "manual")
+				add(filepath.Join(manualDir, d.Name()), d.Name(), "manual")
 			}
 		}
 	}
@@ -638,14 +652,276 @@ func modDirHasModInfo(dir string) bool {
 	return false
 }
 
-// DiscoverModNames returns the sorted names of all mods found on disk,
-// logging where each one was found.
+// modVariant is one mod.info of a mod folder: the folder's own mod.info (b41
+// layout) or the build-42 variant in an immediate subdirectory.
+type modVariant struct {
+	path       string
+	buildDir   string
+	versionMin string
+	versionMax string
+}
+
+// modVariants returns every mod.info of a mod folder (direct + one per
+// immediate subdirectory) with its version constraints.
+func modVariants(dir string) []modVariant {
+	var variants []modVariant
+	add := func(path, buildDir string) {
+		info := readModInfo(path)
+		variants = append(variants, modVariant{
+			path:       path,
+			buildDir:   buildDir,
+			versionMin: strings.TrimSpace(info["versionMin"]),
+			versionMax: strings.TrimSpace(info["versionMax"]),
+		})
+	}
+	if hasModInfo(dir) {
+		add(filepath.Join(dir, "mod.info"), "")
+	}
+	sub, err := os.ReadDir(dir)
+	if err == nil {
+		for _, d := range sub {
+			if d.IsDir() && hasModInfo(filepath.Join(dir, d.Name())) {
+				add(filepath.Join(dir, d.Name(), "mod.info"), d.Name())
+			}
+		}
+	}
+	return variants
+}
+
+// readModInfo parses the key=value fields of a mod.info file.
+func readModInfo(path string) map[string]string {
+	out := make(map[string]string)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		eq := strings.Index(line, "=")
+		if eq <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:eq])
+		if key == "" || strings.ContainsAny(key, " \t") {
+			continue
+		}
+		if _, ok := out[key]; !ok {
+			out[key] = strings.TrimSpace(line[eq+1:])
+		}
+	}
+	return out
+}
+
+// gameVersion is a Project Zomboid build version such as 42.20.2.
+type gameVersion struct {
+	major, minor, patch int
+}
+
+// parseGameVersion parses "42", "42.20" or "42.20.2". Returns false for
+// empty or malformed values.
+func parseGameVersion(s string) (gameVersion, bool) {
+	var v gameVersion
+	if s == "" {
+		return v, false
+	}
+	parts := strings.Split(s, ".")
+	for i := 0; i < 3; i++ {
+		n := 0
+		if i < len(parts) {
+			val := parts[i]
+			if val == "" {
+				return v, false
+			}
+			for _, c := range val {
+				if c < '0' || c > '9' {
+					return v, false
+				}
+			}
+			n = atoi(val)
+		}
+		switch i {
+		case 0:
+			v.major = n
+		case 1:
+			v.minor = n
+		case 2:
+			v.patch = n
+		}
+	}
+	return v, true
+}
+
+func atoi(s string) int {
+	n := 0
+	for _, c := range s {
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+// before reports whether v is strictly older than o.
+func (v gameVersion) before(o gameVersion) bool {
+	if v.major != o.major {
+		return v.major < o.major
+	}
+	if v.minor != o.minor {
+		return v.minor < o.minor
+	}
+	return v.patch < o.patch
+}
+
+// compatible reports whether the mod.info version constraints allow gameVer.
+func (v modVariant) compatible(gameVer gameVersion) bool {
+	if v.versionMin != "" {
+		if min, ok := parseGameVersion(v.versionMin); ok && gameVer.before(min) {
+			return false
+		}
+	}
+	if v.versionMax != "" {
+		if max, ok := parseGameVersion(v.versionMax); ok && max.before(gameVer) {
+			return false
+		}
+	}
+	return true
+}
+
+// consoleVersionPath is the server console log inside the data dir. The game
+// prints its own build there (version=42.20.2), which tells us which mod.info
+// variant the running server will pick.
+func consoleVersionPath(cfg *config.ServerConfig) string {
+	return filepath.Join(cfg.DataDir, "server-console.txt")
+}
+
+// serverGameVersion reads the game version from the last server boot logged
+// in the console. Returns false when the server has never been started or the
+// line cannot be parsed.
+func serverGameVersion(cfg *config.ServerConfig) (gameVersion, bool) {
+	data, err := os.ReadFile(consoleVersionPath(cfg))
+	if err != nil {
+		return gameVersion{}, false
+	}
+	re := regexp.MustCompile(`version=(\d+\.\d+(?:\.\d+)?)`)
+	matches := re.FindAllStringSubmatch(string(data), -1)
+	if len(matches) == 0 {
+		return gameVersion{}, false
+	}
+	// The console spans many boots; the last line wins.
+	return parseGameVersion(matches[len(matches)-1][1])
+}
+
+// selectModVariant picks the mod.info variant the PZ server will use for the
+// running game version: the versioned variant with the highest versionMin
+// whose range contains gameVer. Without a known game version the newest
+// variant (highest versionMin) is preferred, and the direct b41-style
+// mod.info is the last resort. The second return value is false when no
+// variant matches the running game version (the mod is outdated).
+func selectModVariant(variants []modVariant, gameVer gameVersion, hasGameVer bool) (modVariant, bool) {
+	if len(variants) == 0 {
+		return modVariant{}, false
+	}
+	best := -1
+	for i := range variants {
+		if hasGameVer && !variants[i].compatible(gameVer) {
+			continue
+		}
+		if best == -1 || variantNewer(variants[i], variants[best]) {
+			best = i
+		}
+	}
+	if best != -1 {
+		return variants[best], true
+	}
+	// No variant matches the running version: fall back to the newest so the
+	// id is still reported, and let the caller warn about incompatibility.
+	newest := 0
+	for i := range variants {
+		if variantNewer(variants[i], variants[newest]) {
+			newest = i
+		}
+	}
+	return variants[newest], false
+}
+
+// variantNewer prefers versioned variants over the direct b41-style mod.info,
+// and among versioned ones the highest versionMin. Ties fall back to a stable
+// path comparison.
+func variantNewer(a, b modVariant) bool {
+	aDir := a.buildDir
+	bDir := b.buildDir
+	if aDir != bDir {
+		if aDir == "" {
+			return false
+		}
+		if bDir == "" {
+			return true
+		}
+		av, aok := parseGameVersion(aDir)
+		bv, bok := parseGameVersion(bDir)
+		if aok && bok {
+			return bv.before(av)
+		}
+		if aok != bok {
+			return aok
+		}
+	}
+	am, aok := parseGameVersion(a.versionMin)
+	bm, bok := parseGameVersion(b.versionMin)
+	if aok && bok && !am.equal(bm) {
+		return bm.before(am)
+	}
+	return a.path > b.path
+}
+
+func (v gameVersion) equal(o gameVersion) bool {
+	return v.major == o.major && v.minor == o.minor && v.patch == o.patch
+}
+
+// resolveModIdentity determines the Mods= identity of a mod folder: the id=
+// field of the mod.info variant matching the running game version, falling
+// back to the folder name when mod.info has no usable id (b41-style mods).
+func resolveModIdentity(dir, folder string, gameVer gameVersion, hasGameVer bool) modOnDisk {
+	variants := modVariants(dir)
+	chosen, compatible := selectModVariant(variants, gameVer, hasGameVer)
+
+	name := folder
+	if chosen.path != "" {
+		if id := strings.TrimSpace(readModInfo(chosen.path)["id"]); id != "" {
+			name = id
+		}
+	}
+
+	return modOnDisk{
+		name:     name,
+		folder:   folder,
+		outdated: len(variants) > 0 && !compatible,
+	}
+}
+
+// DiscoverModNames returns the sorted names of all mods found on disk that
+// are compatible with the running game version, logging where each one was
+// found. Build 42 mods are registered by the id= field of their mod.info
+// (which may differ from the folder name); b41-style mods without an id keep
+// the folder name. Mods whose version constraints exclude the running game
+// version are skipped with a warning: the game refuses to load them anyway.
 func DiscoverModNames(cfg *config.ServerConfig) []string {
 	mods := scanModFolders(cfg)
 
 	names := make([]string, 0, len(mods))
-	for name, source := range mods {
-		fmt.Printf("Discovered mod %q (%s)\n", name, source)
+	for name, m := range mods {
+		where := m.source
+		if m.folder != name {
+			where += ", folder " + m.folder
+		}
+		fmt.Printf("Discovered mod %q (%s)\n", name, where)
+		if m.outdated {
+			gameVer, hasGameVer := serverGameVersion(cfg)
+			suffix := ""
+			if hasGameVer {
+				suffix = fmt.Sprintf(" for game version %d.%d.%d", gameVer.major, gameVer.minor, gameVer.patch)
+			}
+			fmt.Printf("WARNING: mod %q is not compatible%s (its mod.info version limits exclude it); the game will not load it - check for an update or remove it from the collection\n", name, suffix)
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -653,15 +929,26 @@ func DiscoverModNames(cfg *config.ServerConfig) []string {
 }
 
 // WarnMissingMods logs a warning for every configured MOD_NAMES entry that
-// has no matching mod folder on disk.
+// has no matching mod on disk. Entries are matched against both the build-42
+// id= identity and the folder name, so either spelling works.
 func WarnMissingMods(cfg *config.ServerConfig) {
 	if cfg.ModNames == "" {
 		return
 	}
 	onDisk := scanModFolders(cfg)
-	for _, name := range strings.Split(cfg.ModNames, ";") {
-		if _, ok := onDisk[name]; !ok {
-			fmt.Printf("WARNING: MOD_NAMES entry %q has no mod folder on disk - check the spelling (mod folder names differ from workshop titles)\n", name)
+	for _, entry := range strings.Split(cfg.ModNames, ";") {
+		if _, ok := onDisk[entry]; ok {
+			continue
+		}
+		matched := false
+		for _, m := range onDisk {
+			if m.folder == entry {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			fmt.Printf("WARNING: MOD_NAMES entry %q has no mod on disk - check the spelling (mod names are the id= field of mod.info in build 42, not the folder name or workshop title)\n", entry)
 		}
 	}
 }

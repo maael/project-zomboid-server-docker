@@ -17,6 +17,7 @@
 - Compose: `stop_grace_period` raised to 120s (shutdown can exceed 60s), `init: true` (zombie reaping), multi-instance example uses profiles to stage servers
 
 ### Fixed
+- Mods whose `mod.info` `id=` differs from the folder name (common in Build 42) were written to `Mods=` under the folder name and silently rejected by the game (`required mod "X" not found`). Auto-detection now resolves the `id=` of the version-matched mod.info variant (with folder-name fallback for b41-style mods), so `MOD_NAMES`/`Mods=` contain what the game registers. Mods whose version constraints exclude the running game version are skipped with a warning instead of failing silently
 - Default sandbox values were Build 41 era: b42 renumbered several option scales (e.g. `Zombies = 1` became "Insane", `DayLength = 1` became 15 minutes) and loot options became direct multipliers, so servers created without `SANDBOX_*` overrides got extreme settings. Defaults now mirror the b42 "Apocalypse" preset (`server-files/media/lua/shared/Sandbox/Apocalypse.lua`)
 - `MAX_RAM`/`MIN_RAM`/`GC_CONFIG`/`JVM_EXTRA_ARGS` were silently ignored: the game's `ProjectZomboid64.json` passes vmArgs on the java command line, overriding `_JAVA_OPTIONS`. The entrypoint now patches the json on every start so the env vars take effect (idempotent, preserves all other vmArgs)
 - `SANDBOX_MODE` leaked into `SandboxVars.lua` as a stray `MODE` key

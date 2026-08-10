@@ -25,6 +25,22 @@ func writeModDir(t *testing.T, dir string, withModInfo bool) {
 	}
 }
 
+func writeModInfo(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeConsoleVersion(t *testing.T, cfg *config.ServerConfig, version string) {
+	t.Helper()
+	writeModInfo(t, filepath.Join(cfg.DataDir, "server-console.txt"),
+		"LOG : General  f:0 st:1,1> version="+version+" abc123 demo=false\n")
+}
+
 func testConfig(t *testing.T) *config.ServerConfig {
 	t.Helper()
 	cfg := config.DefaultConfig()
@@ -74,6 +90,119 @@ func TestWarnMissingMods(t *testing.T) {
 
 	// Must not panic; TypoMod gets a warning, GoodMod does not.
 	WarnMissingMods(cfg)
+}
+
+func TestDiscoverModNamesUsesModInfoID(t *testing.T) {
+	cfg := testConfig(t)
+	base := filepath.Join(cfg.ServerDir, "steamapps/workshop/content/108600/2503743612/mods")
+	// id= differs from the folder name (common in build 42 mods): the id is
+	// what the game registers the mod under, so Mods= must contain it.
+	writeModInfo(t, filepath.Join(base, "Firearms", "mod.info"), "name=Firearms B41\nid=firearmmod\n")
+	// No id= -> folder name (b41-style mod).
+	writeModInfo(t, filepath.Join(base, "PlainMod", "mod.info"), "name=test\n")
+	// Whitespace around id= is trimmed.
+	writeModInfo(t, filepath.Join(base, "CarriableItems", "mod.info"), "id= CVI \n")
+
+	names := DiscoverModNames(cfg)
+	want := []string{"CVI", "PlainMod", "firearmmod"}
+	if !reflect.DeepEqual(names, want) {
+		t.Errorf("DiscoverModNames = %v, want %v", names, want)
+	}
+}
+
+func TestDiscoverModNamesVersionAware(t *testing.T) {
+	cfg := testConfig(t)
+	writeConsoleVersion(t, cfg, "42.20.2")
+
+	base := filepath.Join(cfg.ServerDir, "steamapps/workshop/content/108600/2256623447/mods")
+	// Older variants constrain their version range; the 42.16 one does not.
+	writeModInfo(t, filepath.Join(base, "Firearms", "mod.info"), "name=Firearms B41\nid=firearmmod\n")
+	writeModInfo(t, filepath.Join(base, "Firearms", "42.12", "mod.info"),
+		"id=2256623447/firearmmod\nversionMin=42.12.0\nversionMax=42.12.0\n")
+	writeModInfo(t, filepath.Join(base, "Firearms", "42.16", "mod.info"),
+		"id=firearmmod\nversionMin=42.16.0\n")
+
+	// A mod whose newest variant is older than the running game version is
+	// skipped with a warning: the game refuses to load it anyway.
+	writeModInfo(t, filepath.Join(base, "Neat_ButcherHook", "42", "mod.info"),
+		"id=Neat_ButcherHook\nversionMin=42.15\nversionMax=42.17\n")
+
+	names := DiscoverModNames(cfg)
+	want := []string{"firearmmod"}
+	if !reflect.DeepEqual(names, want) {
+		t.Errorf("DiscoverModNames = %v, want %v", names, want)
+	}
+}
+
+func TestDiscoverModNamesNoConsoleVersionIncludesAll(t *testing.T) {
+	cfg := testConfig(t)
+	// No server-console.txt yet (first boot): version constraints cannot be
+	// evaluated, so every mod is included.
+	base := filepath.Join(cfg.ServerDir, "steamapps/workshop/content/108600/2256623447/mods")
+	writeModInfo(t, filepath.Join(base, "Neat_ButcherHook", "42", "mod.info"),
+		"id=Neat_ButcherHook\nversionMin=42.15\nversionMax=42.17\n")
+
+	names := DiscoverModNames(cfg)
+	if !reflect.DeepEqual(names, []string{"Neat_ButcherHook"}) {
+		t.Errorf("DiscoverModNames = %v, want the mod included when no console version is known", names)
+	}
+}
+
+func TestWarnMissingModsMatchesFolderName(t *testing.T) {
+	cfg := testConfig(t)
+	base := filepath.Join(cfg.ServerDir, "steamapps/workshop/content/108600/2503743612/mods")
+	writeModInfo(t, filepath.Join(base, "Firearms", "mod.info"), "id=firearmmod\n")
+	cfg.ModNames = "Firearms"
+
+	// The folder name must match even though the id differs.
+	WarnMissingMods(cfg)
+}
+
+func TestParseGameVersion(t *testing.T) {
+	cases := []struct {
+		in   string
+		want gameVersion
+		ok   bool
+	}{
+		{"42", gameVersion{42, 0, 0}, true},
+		{"42.20", gameVersion{42, 20, 0}, true},
+		{"42.20.2", gameVersion{42, 20, 2}, true},
+		{"", gameVersion{}, false},
+		{"42.20.x", gameVersion{}, false},
+		{"b42", gameVersion{}, false},
+	}
+	for _, tc := range cases {
+		got, ok := parseGameVersion(tc.in)
+		if ok != tc.ok || (ok && got != tc.want) {
+			t.Errorf("parseGameVersion(%q) = %v,%v want %v,%v", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestSelectModVariant(t *testing.T) {
+	v42 := modVariant{path: "a/42/mod.info", buildDir: "42", versionMin: "42.0.0"}
+	v4213 := modVariant{path: "a/42.13/mod.info", buildDir: "42.13", versionMin: "42.13.0"}
+	v4216 := modVariant{path: "a/42.16/mod.info", buildDir: "42.16", versionMin: "42.16.0"}
+	direct := modVariant{path: "a/mod.info"}
+
+	gameVer, _ := parseGameVersion("42.20.2")
+
+	// Newest compatible variant wins, older version-capped ones are skipped.
+	got, ok := selectModVariant([]modVariant{v42, v4213, v4216, direct}, gameVer, true)
+	if !ok || got.path != v4216.path {
+		t.Errorf("selectModVariant = %v,%v want %v,true", got, ok, v4216)
+	}
+	// No compatible variant: falls back to the newest, reports incompatibility.
+	vOld := modVariant{path: "a/42/mod.info", buildDir: "42", versionMin: "42.15", versionMax: "42.17"}
+	got, ok = selectModVariant([]modVariant{vOld}, gameVer, true)
+	if ok || got.path != vOld.path {
+		t.Errorf("selectModVariant = %v,%v want fallback %v,false", got, ok, vOld)
+	}
+	// Without a known game version the newest variant wins.
+	got, ok = selectModVariant([]modVariant{v42, v4213, direct}, gameVer, false)
+	if !ok || got.path != v4213.path {
+		t.Errorf("selectModVariant = %v,%v want %v,true", got, ok, v4213)
+	}
 }
 
 func TestResolveModWorkshopIDsMergesCollections(t *testing.T) {
